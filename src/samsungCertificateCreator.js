@@ -187,7 +187,7 @@ class SamsungCertificateCreator {
             contentType: 'application/octet-stream',
             filename: 'author.csr'
         });
-        const request = await fetch('https://dev.tizen.samsung.com:443/apis/v2/authors', {
+        const request = await fetch('https://svdca.samsungqbe.com/apis/v3/authors', {
             method: 'POST',
             headers: formData.getHeaders(),
             body: formData
@@ -221,7 +221,7 @@ class SamsungCertificateCreator {
             filename: 'distributor.csr'
         });
 
-        const request = await fetch('https://dev.tizen.samsung.com/apis/v2/distributors', {
+        const request = await fetch('https://svdca.samsungqbe.com/apis/v3/distributors', {
             method: 'POST',
             headers: formData.getHeaders(),
             body: formData
@@ -232,32 +232,6 @@ class SamsungCertificateCreator {
             return text;
         } else {
             throw new Error('Failed to fetch distributor certificate\n' + await request.text());
-        }
-    }
-
-    async _fetchDistributorXML(accessInfo, authorInfo, distributorCert) {
-        const formData = new FormData();
-        formData.append('access_token', accessInfo.accessToken);
-        formData.append('user_id', accessInfo.userId);
-        formData.append('platform', 'VD');
-        formData.append('privilege_level', authorInfo.privilegeLevel);
-        formData.append('developer_type', 'Individual');
-        formData.append('csr', distributorCert.csr, {
-            contentType: 'application/octet-stream',
-            filename: 'distributor.csr'
-        });
-
-        const request = await fetch('https://dev.tizen.samsung.com/apis/v1/distributors', {
-            method: 'POST',
-            headers: formData.getHeaders(),
-            body: formData
-        });
-
-        if (request.ok) {
-            const text = await request.text();
-            return text;
-        } else {
-            throw new Error('Failed to fetch distributor XML\n' + await request.text());
         }
     }
 
@@ -306,8 +280,8 @@ class SamsungCertificateCreator {
         const authorCert = this._generateAuthorCert(authorInfo);
         const distributorCert = this._generateDistributorCert(authorInfo, duidList);
         const authorCertVD = await this._fetchAuthorCert(accessInfo, authorCert);
+        const distributorXMLVD = await this._fetchDistributorCert(accessInfo, authorInfo, distributorCert);
         const distributorCertVD = await this._fetchDistributorCert(accessInfo, authorInfo, distributorCert);
-        const distributorXMLVD = await this._fetchDistributorXML(accessInfo, authorInfo, distributorCert);
         const vdAuthorCert = await this._generateAuthorPKCS12(authorCert, authorCertVD, authorInfo);
         const vdDistributorCert = await this._generateDistributorPKCS12(distributorCert, distributorCertVD, authorInfo);
 

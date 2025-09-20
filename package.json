@@ -1,6 +1,6 @@
 {
   "name": "tizen",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Rebuild, resign, and package Tizen applications without Tizen Studio.",
   "main": "index.js",
   "bin": {
