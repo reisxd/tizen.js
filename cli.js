@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 
 const { Command } = require('commander');
-const { Signature, SamsungCertificateCreator, TizenCertificateCreator } = require('./index.js');
+const { Signature, SamsungCertificateCreator, TizenCertificateCreator, installWgt, launchApp } = require('./index.js');
 const { writeFileSync, readFileSync, readdirSync, statSync, mkdirSync } = require('fs');
 const forge = require('node-forge');
 const JSZip = require('jszip');
+
+// Signature files already in the tree are leftovers from an earlier build: they are regenerated
+// below, and packing them makes the signatures describe the old tree, which the set then rejects
+// with `install failed[118, -12] ... Invalid signature`.
+const STALE_SIGNATURE = /^(?:author-signature|signature\d+)\.xml$/i;
 const Package = require('./package.json');
-const { join } = require('path');
+const { join, relative } = require('path');
 const { homedir } = require('os');
 
 const program = new Command();
@@ -62,7 +67,7 @@ program.command('build <dir/pkg>')
                 Object.keys(zip.files).map(async (filename) => {
                     const file = zip.files[filename];
                     if (file.dir) return null;
-                    if (file.name === 'author-signature.xml' || file.name === 'signature1.xml') return null;
+                    if (STALE_SIGNATURE.test(file.name)) return null;
                     const data = await file.async('nodebuffer');
                     return {
                         uri: encodeURIComponent(filename),
@@ -70,43 +75,31 @@ program.command('build <dir/pkg>')
                     };
                 })
             );
-
             files = files.filter(Boolean);
         } else {
-            readdirSync('.').forEach(file => {
-                const stat = statSync(file);
-                if (
-                    ignoredLiterals.includes(file) ||
-                    ignoredRegexes.some(re => re.test(file))
-                ) {
-                    return;
-                }
-                if (stat.isFile()) {
-                    const data = readFileSync(file);
-                    files.push({ uri: encodeURIComponent(file), data });
-                } else if (stat.isDirectory()) {
-                    readFilesInDirectory(file);
-                }
-            });
-
-            function readFilesInDirectory(directory) {
-                readdirSync(directory).forEach(file => {
+            const baseDir = dir;
+            function readFilesInDirectory(currentDir) {
+                readdirSync(currentDir).forEach(file => {
+                    const fullPath = join(currentDir, file);
+                    const relPath = relative(baseDir, fullPath);
                     if (
+                        STALE_SIGNATURE.test(file) ||
                         ignoredLiterals.includes(file) ||
-                        ignoredRegexes.some(re => re.test(file))
+                        ignoredLiterals.includes(relPath) ||
+                        ignoredRegexes.some(re => re.test(relPath))
                     ) {
                         return;
                     }
-                    const filePath = `${directory}/${file}`;
-                    const stat = statSync(filePath);
+                    const stat = statSync(fullPath);
                     if (stat.isFile()) {
-                        const data = readFileSync(filePath);
-                        files.push({ uri: encodeURIComponent(filePath), data });
+                        const data = readFileSync(fullPath);
+                        files.push({ uri: encodeURIComponent(relPath.replace(/\\/g, '/')), data });
                     } else if (stat.isDirectory()) {
-                        readFilesInDirectory(filePath);
+                        readFilesInDirectory(fullPath);
                     }
                 });
             }
+            readFilesInDirectory(baseDir);
         }
 
         const AuthorSignature = new Signature('AuthorSignature', files);
@@ -203,6 +196,67 @@ program.command('create-samsung-cert')
         writeFileSync(`${options.output}/device-profile.xml`, info.distributorXML);
 
         console.log(`Samsung Certificate created successfully: ${options.output}`);
+    });
+
+program.command('install <pkg>')
+    .description('Install a .wgt package on the TV over network (push + vd_appinstall, no Tizen Studio needed)')
+    .option('-s, --serial <serial>', 'Target device serial (default: first device in "device" state)')
+    .option('--pkg-id <id>', 'Package ID override (default: read from config.xml inside the package)')
+    .option('--sdb <path>', 'Path to the sdb binary (default: sdb in PATH)')
+    .action(async (pkg, options) => {
+        const { existsSync, realpathSync } = require('fs');
+        const wgtPath = realpathSync(pkg);
+        if (!existsSync(wgtPath) || !wgtPath.endsWith('.wgt')) {
+            throw new Error(`Package not found or not a .wgt file: ${pkg}`);
+        }
+        let pkgId = options.pkgId;
+        if (!pkgId) {
+            const zip = await JSZip.loadAsync(readFileSync(wgtPath));
+            const cfgFile = zip.file('config.xml');
+            if (!cfgFile) throw new Error('config.xml not found inside package');
+            const cfg = await cfgFile.async('string');
+            const m = cfg.match(/package="([^"]+)"/);
+            if (!m) throw new Error('package ID not found in config.xml');
+            pkgId = m[1];
+        }
+        const res = await installWgt({
+            wgtPath,
+            pkgId,
+            serial: options.serial,
+            sdbBin: options.sdb || 'sdb',
+            onOutput: (text) => process.stdout.write(text.replace(/\r/g, '\n')),
+        });
+        if (!res.success) {
+            const reason = res.errorReason && !/^success$/i.test(res.errorReason)
+                ? `: ${res.errorReason}`
+                : ' — the television gave no reason, which is not a signature or storage error';
+            const detail = res.errorCode === undefined
+                ? ''
+                : ` (code ${res.errorCode}${res.errorDetail ? `/${res.errorDetail}` : ''}${reason})`;
+            console.error(`\nFailed to install Tizen application.${detail}`);
+            process.exitCode = 1;
+        } else {
+            console.log('\nTizen application is successfully installed.');
+        }
+    });
+
+program.command('run <appId>')
+    .description('Launch an installed app on the TV over network (no Tizen Studio needed)')
+    .option('-s, --serial <serial>', 'Target device serial (default: first device in "device" state)')
+    .option('--sdb <path>', 'Path to the sdb binary (default: sdb in PATH)')
+    .action(async (appId, options) => {
+        const res = await launchApp({
+            appId,
+            serial: options.serial,
+            sdbBin: options.sdb || 'sdb',
+            onOutput: (text) => process.stdout.write(text.replace(/\r/g, '\n')),
+        });
+        if (!res.success) {
+            console.error('\nFailed to launch application.');
+            process.exitCode = 1;
+        } else {
+            console.log('\nTizen application is successfully launched.');
+        }
     });
 
 program.parse();

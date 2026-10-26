@@ -53,7 +53,7 @@ class TizenCertificateCreator {
      */
 
     _generateAuthorCert(authorInfo) {
-        const key = forge.pki.rsa.generateKeyPair(1024);
+        const key = forge.pki.rsa.generateKeyPair(2048);
         const cert = forge.pki.createCertificate();
 
         cert.publicKey = key.publicKey;
@@ -140,7 +140,11 @@ class TizenCertificateCreator {
         const certPem = forge.pki.certificateToPem(cert);
         const developerCa = readFileSync(join(homedir(), 'share/.tizen-cert/developer/tizen-developer-ca.cer'), 'utf-8');
 
-        const pkcs12 = forge.pkcs12.toPkcs12Asn1(developerPrivateKey, [certPem, developerCa], authorInfo.password, {
+        // The p12 must hold the *author's* private key, the one that matches `certPem`.
+        // Storing the CA key here (as this used to) produces a bundle whose key does not match
+        // its own certificate, so every package signed with it is rejected by the set with
+        // `install failed[118, -12] ... Invalid signature. Signed with wrong key`.
+        const pkcs12 = forge.pkcs12.toPkcs12Asn1(key.privateKey, [certPem, developerCa], authorInfo.password, {
             generateLocalKeyId: true,
             friendlyName: 'UserCertificate'
         });
