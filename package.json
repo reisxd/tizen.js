@@ -6,7 +6,9 @@
   "bin": {
     "tizenjs": "cli.js"
   },
-  "scripts": {},
+  "scripts": {
+    "test": "node --test"
+  },
   "keywords": [
     "tizen",
     "tizen.js",
